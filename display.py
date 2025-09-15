@@ -1,7 +1,8 @@
 import sys
 import json
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QTableWidget, 
-                               QTableWidgetItem, QLabel, QPushButton, QMessageBox, QHBoxLayout, QSpacerItem, QSizePolicy, QLineEdit)
+                               QTableWidgetItem, QLabel, QPushButton, QMessageBox, 
+                               QHBoxLayout, QSpacerItem, QSizePolicy, QLineEdit, QComboBox)
 from PySide6.QtCore import Qt, QSize, QTimer
 
 import win32api
@@ -19,8 +20,10 @@ def get_supported_display_modes():
     while True:
         try:
             device = win32api.EnumDisplayDevices(None, device_num)
+            print("device:",device)
             if device.StateFlags & win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP:
                 device_name = device.DeviceString
+                print("name:",device_name)
                 
                 current_settings = win32api.EnumDisplaySettings(device.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
                 
@@ -110,6 +113,8 @@ class DisplayInfoApp(QWidget):
         self.supported_modes_list = self.flatten_modes(display_data)
 
         self.initUI()
+        self.populate_device_combo(display_data)
+        self.populate_table_widget(display_data)
         
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.change_next_setting)
@@ -126,9 +131,16 @@ class DisplayInfoApp(QWidget):
         main_layout = QVBoxLayout()
         
         top_layout = QHBoxLayout()
+        
+        # Display selection combo box
+        self.device_combo = QComboBox()
+        self.device_combo.setFixedWidth(200)
+        
+        # Current info label
         self.current_info_label = QLabel()
         self.current_info_label.setStyleSheet("font-size: 14px; font-weight: bold; padding: 5px; border: 1px solid gray;")
         
+        # Time setting widgets
         time_setting_layout = QHBoxLayout()
         time_label = QLabel("자동 변경 시간(초):")
         self.time_edit = QLineEdit()
@@ -137,8 +149,8 @@ class DisplayInfoApp(QWidget):
         
         time_setting_layout.addWidget(time_label)
         time_setting_layout.addWidget(self.time_edit)
-        time_setting_layout.addItem(QSpacerItem(20, 40, QSizePolicy.Expanding, QSizePolicy.Minimum))
-
+        
+        # Buttons
         button_layout = QHBoxLayout()
         self.manual_change_button = QPushButton("선택하여 설정 변경")
         self.manual_change_button.clicked.connect(self.on_manual_change_clicked)
@@ -151,10 +163,11 @@ class DisplayInfoApp(QWidget):
         button_layout.addWidget(self.manual_change_button)
         button_layout.addWidget(self.auto_change_button)
         
-        top_layout.addLayout(button_layout)
+        top_layout.addWidget(self.device_combo)
         top_layout.addWidget(self.current_info_label)
         top_layout.addLayout(time_setting_layout)
-        
+        top_layout.addItem(QSpacerItem(20, 40, QSizePolicy.Expanding, QSizePolicy.Minimum))
+        top_layout.addLayout(button_layout)
         
         main_layout.addLayout(top_layout)
 
@@ -172,14 +185,35 @@ class DisplayInfoApp(QWidget):
         main_layout.addWidget(self.table_widget)
 
         self.update_current_info_label()
-        self.populate_table_widget(get_supported_display_modes())
         
         self.setLayout(main_layout)
+    
+    def populate_device_combo(self, supported_modes):
+        """Populates the combo box with device names and connects its signal."""
+        self.device_combo.clear()
         
+        # Add an option to show all devices
+        self.device_combo.addItem("모든 디스플레이", userData=None)
+        
+        # Add each unique device name to the combo box
+        for device_name in supported_modes.keys():
+            self.device_combo.addItem(device_name, userData=device_name)
+        
+        # Connect the signal to the filtering function
+        self.device_combo.currentIndexChanged.connect(self.filter_table_by_device)
+        
+    def filter_table_by_device(self, index):
+        """Filters the table to show only modes for the selected device."""
+        selected_device_name = self.device_combo.itemData(index)
+        
+        supported_modes = get_supported_display_modes()
+        self.populate_table_widget(supported_modes, filter_device=selected_device_name)
+
     def flatten_modes(self, data):
         """Converts the nested dictionary of modes into a single flat list."""
         modes_list = []
         for device_modes in data.values():
+            print("device_modes:",device_modes)
             modes_list.extend(device_modes)
         return modes_list
 
@@ -230,6 +264,7 @@ class DisplayInfoApp(QWidget):
         self.auto_change_active = True
         self.auto_change_button.setText("자동 변경 중지 (ESC)")
         self.manual_change_button.setEnabled(False)
+        self.device_combo.setEnabled(False)
         
         selected_row = self.table_widget.currentRow()
         if selected_row >= 0:
@@ -246,6 +281,7 @@ class DisplayInfoApp(QWidget):
         self.auto_change_active = False
         self.auto_change_button.setText("자동 변경 시작")
         self.manual_change_button.setEnabled(True)
+        self.device_combo.setEnabled(True)
 
     def change_next_setting(self):
         if self.current_setting_index >= len(self.supported_modes_list):
@@ -285,7 +321,7 @@ class DisplayInfoApp(QWidget):
         current_info = get_current_display_info()
         self.current_info_label.setText(current_info)
 
-    def populate_table_widget(self, supported_modes):
+    def populate_table_widget(self, supported_modes, filter_device=None):
         self.table_widget.setSortingEnabled(False)
         
         if not supported_modes:
@@ -297,22 +333,20 @@ class DisplayInfoApp(QWidget):
         key_counter = 1
         
         for device_name, modes_list in supported_modes.items():
+            if filter_device and device_name != filter_device:
+                continue
+                
             for mode_data in modes_list:
                 self.table_widget.insertRow(row_count)
                 
                 key_item = QTableWidgetItem(f"{key_counter}")
-                key_item.setData(Qt.UserRole, key_counter)
+                key_item.setData(Qt.UserRole + 1, mode_data)
                 
                 width_item = QTableWidgetItem(f"{mode_data['width']}")
                 height_item = QTableWidgetItem(f"{mode_data['height']}")
                 frequency_item = QTableWidgetItem(f"{mode_data['frequency']}")
                 bits_item = QTableWidgetItem(f"{mode_data['bits_per_pixel']}")
                 
-                width_item.setData(Qt.UserRole, mode_data['width'])
-                height_item.setData(Qt.UserRole, mode_data['height'])
-                frequency_item.setData(Qt.UserRole, mode_data['frequency'])
-                bits_item.setData(Qt.UserRole, mode_data['bits_per_pixel'])
-
                 self.table_widget.setItem(row_count, 0, key_item)
                 self.table_widget.setItem(row_count, 1, QTableWidgetItem(device_name))
                 self.table_widget.setItem(row_count, 2, width_item)
@@ -325,9 +359,6 @@ class DisplayInfoApp(QWidget):
                 current_item.setTextAlignment(Qt.AlignCenter)
                 self.table_widget.setItem(row_count, 6, current_item)
                 
-                self.table_widget.item(row_count, 0).setData(Qt.UserRole + 1, mode_data)
-                
-                # 🟢 수정된 부분: 테이블 위젯을 업데이트할 때 배경색을 다시 설정합니다.
                 is_current_row = mode_data['current']
                 
                 for col in range(self.table_widget.columnCount()):
@@ -367,8 +398,6 @@ class DisplayInfoApp(QWidget):
             if result == win32con.DISP_CHANGE_SUCCESSFUL:
                 print("설정 변경 성공")
                 self.update_current_info_label()
-                
-                # 🟢 수정된 부분: 테이블 위젯을 업데이트하여 하이라이팅 적용
                 updated_data = get_supported_display_modes()
                 self.populate_table_widget(updated_data)
                 return True
@@ -378,10 +407,6 @@ class DisplayInfoApp(QWidget):
         except Exception as e:
             print(f"설정 변경 중 오류: {e}")
             return False
-
-    def highlight_current_row(self, current_mode_data):
-        """이 함수는 더 이상 필요하지 않습니다."""
-        pass
 
 
 if __name__ == '__main__':
